@@ -13,7 +13,19 @@ export const runtime = "nodejs";
  * this goes to real production use, add a trigger that rejects writes to
  * transactions whose period is closed.
  */
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, context: { params: { id: string } }) {
+  try {
+    return await handlePost(request, context);
+  } catch (err) {
+    console.error("close route failed:", err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) },
+      { status: 500 }
+    );
+  }
+}
+
+async function handlePost(request: Request, { params }: { params: { id: string } }) {
   const periodId = params.id;
   const db = createServiceRoleClient();
 

@@ -26,6 +26,10 @@ export interface ProductSubtotal {
    *  qtyTotal/valueTotal for the checksum (spec §3.6) */
   qtyComputed: number;
   valueComputed: number;
+  /** the original line text, kept so a checksum mismatch can show exactly
+   *  what was parsed — needed to fix the column-position ASSUMPTIONs in
+   *  extractQtyAndValue() against a real file's actual layout */
+  rawLine: string;
 }
 
 export interface CustomerSubtotal {
@@ -35,12 +39,14 @@ export interface CustomerSubtotal {
   valueTotal: number;
   qtyComputed: number;
   valueComputed: number;
+  rawLine: string;
 }
 
 export interface FileGrandTotal {
   customerCount: number | null;
   qtyTotal: number;
   valueTotal: number;
+  rawLine: string;
 }
 
 export interface ParsedSalesReport {

@@ -18,7 +18,19 @@ export const maxDuration = 60;
  * (distance_km, is_excluded, is_one_way, sale_type overrides) — safe to
  * call repeatedly as accounting clears Review items (spec §5).
  */
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, context: { params: { id: string } }) {
+  try {
+    return await handlePost(request, context);
+  } catch (err) {
+    console.error("calculate route failed:", err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) },
+      { status: 500 }
+    );
+  }
+}
+
+async function handlePost(_request: Request, { params }: { params: { id: string } }) {
   const periodId = params.id;
   const db = createServiceRoleClient();
 

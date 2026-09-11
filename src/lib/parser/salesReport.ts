@@ -114,6 +114,7 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
         customerCount: countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : null,
         qtyTotal: qty ?? 0,
         valueTotal: value ?? 0,
+        rawLine: trimmed,
       };
       grandTotalSeen = true;
       continue;
@@ -128,6 +129,7 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
         valueTotal: value ?? 0,
         qtyComputed: customerBlockQty,
         valueComputed: customerBlockValue,
+        rawLine: trimmed,
       });
       customerBlockQty = 0;
       customerBlockValue = 0;
@@ -198,6 +200,7 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
           valueTotal: value ?? 0,
           qtyComputed: productBlockQty,
           valueComputed: productBlockValue,
+          rawLine: trimmed,
         });
         productBlockQty = 0;
         productBlockValue = 0;

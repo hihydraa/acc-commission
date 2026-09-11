@@ -7,7 +7,19 @@ import type { TeamSplitConfig } from "@/lib/calc/teamSplit";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, context: { params: { id: string } }) {
+  try {
+    return await handleGet(request, context);
+  } catch (err) {
+    console.error("export route failed:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleGet(_request: Request, { params }: { params: { id: string } }) {
   const periodId = params.id;
   const db = createServiceRoleClient();
 

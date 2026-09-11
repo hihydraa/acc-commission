@@ -25,7 +25,24 @@ export const maxDuration = 60;
  * written — a failing checksum stops here with ok:false and the issue list;
  * nothing partial is written to `transactions`.
  */
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, context: { params: { id: string } }) {
+  try {
+    return await handlePost(request, context);
+  } catch (err) {
+    // Any unhandled throw here (pdf-parse choking on a malformed/odd PDF,
+    // a regex edge case, etc.) used to fall through to Vercel's generic
+    // HTML error page — which the client can't parse as JSON, so it just
+    // showed a bare "HTTP 500" with no message. Catching it here means a
+    // real crash is at least diagnosable from the Upload page.
+    console.error("parse route failed:", err);
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? `${err.name}: ${err.message}` : String(err) },
+      { status: 500 }
+    );
+  }
+}
+
+async function handlePost(request: Request, { params }: { params: { id: string } }) {
   const periodId = params.id;
 
   const form = await request.formData();
