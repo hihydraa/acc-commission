@@ -12,19 +12,24 @@ import type {
  * strings, per the "deterministic parser, no PDF binary needed for tests"
  * approach in spec §9 step 1).
  *
- * ⚠️ KNOWN LIMITATION — read before trusting this against real files:
- * this session had no real PDF sample to parse against, only the line
- * excerpts quoted in the spec (§3.2-§3.6). The following assumptions are
- * best-effort guesses and MUST be verified against an actual exported PDF
- * before this goes into production (see README "ก่อนใช้งานจริง"):
- *   1. In subtotal / grand-total lines, the liters figure is the number
- *      immediately followed by the unit label "ลิตร"; the value figure is
- *      the right-most decimal number on the line.
- *   2. Page-header / column-header lines are recognized by the marker list
- *      in SKIP_LINE_MARKERS below.
- * If parsing disagrees with the real files, the mandatory checksum (§3.6)
- * will fail loudly rather than silently producing wrong commission numbers
- * — that fail-closed behavior is intentional and must not be relaxed.
+ * Column layout for subtotal/grand-total lines (extractQtyAndValue below)
+ * was originally a guess and has since been CONFIRMED against 4 real
+ * production PDFs (เบอร์60/เบอร์67/เทรลเลอร์68/กรอกปั๊ม, ส.ค. 69) — see the
+ * tests in tests/parser/extractQtyAndValue.test.ts, which use verbatim
+ * lines from those files and match the spec's known-correct §3.6 totals
+ * exactly.
+ *
+ * ⚠️ STILL UNVERIFIED against a real file: the SALE-LINE column order
+ * (doc_no/date/qty/sale_value/cost/customer_code/...) and the header/
+ * column-header skip markers in SKIP_LINE_MARKERS. Those happened to work
+ * correctly for the qty totals in the files checked so far (every qty
+ * checksum passed), but haven't been stress-tested the way the subtotal
+ * line layout has. If a future file fails checksum on qty (not just
+ * value), suspect this part next.
+ *
+ * The mandatory checksum (§3.6) fails loudly rather than silently
+ * producing wrong commission numbers when any assumption here is wrong —
+ * that fail-closed behavior is intentional and must not be relaxed.
  */
 
 const SALE_LINE_RE = /^(\S.*?)\s+(\d{2}\/\d{2}\/\d{2})\s+(.*)$/;
@@ -54,12 +59,39 @@ function isNumericToken(token: string): boolean {
   return /^-?[\d,]+(\.\d+)?$/.test(token);
 }
 
-function extractQtyAndValue(line: string): { qty: number | null; value: number | null } {
+/**
+ * Column layout confirmed against real exported PDFs (spec files เบอร์60/
+ * เบอร์67/เทรลเลอร์68/กรอกปั๊ม, ส.ค. 69) — a subtotal/grand-total line always
+ * has exactly 6 quantity columns then, after the "ลิตร" label, 9 value
+ * columns: [cash_qty, credit_qty, _, _, _, TOTAL_QTY] ลิตร
+ * [cash_value, credit_value, _, _, TOTAL_VALUE, cost, _, profit, profit%].
+ * The trailing "profit%" column (a small number like 6.19-11.70) was being
+ * misread as the total value before this fix — verified by reproducing all
+ * 4 real files' grand totals exactly against the spec's known reference
+ * numbers (6,303,635.56 / 7,189,472.77 / 5,051,106.44).
+ */
+export function extractQtyAndValue(line: string): { qty: number | null; value: number | null } {
+  const litersIdx = line.indexOf("ลิตร");
+
+  if (litersIdx !== -1) {
+    const beforeNumbers = [...line.slice(0, litersIdx).matchAll(/-?[\d,]+\.\d+/g)].map((m) =>
+      parseThaiNumber(m[0])
+    );
+    const qty = beforeNumbers.length > 0 ? beforeNumbers[beforeNumbers.length - 1] : null;
+
+    const afterNumbers = [...line.slice(litersIdx + "ลิตร".length).matchAll(/-?[\d,]+\.\d+/g)].map((m) =>
+      parseThaiNumber(m[0])
+    );
+    const value = afterNumbers.length >= 5 ? afterNumbers[4] : afterNumbers[afterNumbers.length - 1] ?? null;
+    return { qty, value };
+  }
+
+  // No "ลิตร" label — this is the file grand-total line, which omits the
+  // unit label but keeps the same fixed 6-qty + 9-value column layout.
   const numberTokens = [...line.matchAll(/-?[\d,]+\.\d+/g)].map((m) => parseThaiNumber(m[0]));
   if (numberTokens.length === 0) return { qty: null, value: null };
-  const litersMatch = line.match(/([\d,]+\.\d+)\s*ลิตร/);
-  const qty = litersMatch ? parseThaiNumber(litersMatch[1]) : numberTokens[0] ?? null;
-  const value = numberTokens[numberTokens.length - 1] ?? null;
+  const qty = numberTokens.length >= 6 ? numberTokens[5] : numberTokens[0];
+  const value = numberTokens.length >= 11 ? numberTokens[10] : numberTokens[numberTokens.length - 1];
   return { qty, value };
 }
 
