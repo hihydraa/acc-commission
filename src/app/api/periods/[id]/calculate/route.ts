@@ -58,9 +58,11 @@ async function handlePost(_request: Request, { params }: { params: { id: string 
 
   const minLitersByDepartment: Record<string, number> = {};
   const fixedFreightByDepartment: Record<string, number | null> = {};
+  const roundToThousandByDepartment: Record<string, boolean> = {};
   for (const d of departments ?? []) {
     minLitersByDepartment[d.code] = Number(d.min_liters);
     fixedFreightByDepartment[d.code] = d.fixed_freight === null ? null : Number(d.fixed_freight);
+    roundToThousandByDepartment[d.code] = d.require_round_thousand ?? true;
   }
 
   const fuelProductCodes = new Set((products ?? []).filter((p) => p.is_fuel).map((p) => p.code));
@@ -80,7 +82,12 @@ async function handlePost(_request: Request, { params }: { params: { id: string 
       ? freightTierRows.map((t) => ({ minKm: Number(t.min_km), maxKm: Number(t.max_km), rate: Number(t.rate) }))
       : undefined;
 
-  const eligibility: EligibilityConfig = { minLitersByDepartment, fuelProductCodes, excludedCustomerCodes };
+  const eligibility: EligibilityConfig = {
+    minLitersByDepartment,
+    fuelProductCodes,
+    excludedCustomerCodes,
+    roundToThousandByDepartment,
+  };
 
   const updates = transactions.map((tx) => {
     let saleType = tx.sale_type as SaleType | null;

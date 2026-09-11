@@ -42,7 +42,11 @@ export default async function SummaryPage({ params }: { params: { id: string } }
 
   const summaryRows = [...bySalesperson.values()].map((agg) => ({
     ...agg,
-    net: roundHalfUp2(agg.commissionRaw),
+    // net = ค่าคอมมิชชั่นรวม (ก่อนหักหนี้) − หักค่าคอมจากหนี้ค้างชำระ, rounded once
+    // at the salesperson level (spec §4.4/§4.6) — this MUST be net-of-debt
+    // before the team split below, otherwise the accounting-entered
+    // outstanding_amount deduction is collected but never actually applied.
+    net: roundHalfUp2(agg.commissionRaw - agg.outstanding),
   }));
 
   return (
@@ -62,12 +66,13 @@ export default async function SummaryPage({ params }: { params: { id: string } }
               <tr className="text-left">
                 <th className="px-3 py-2">เซลล์</th>
                 <th className="px-3 py-2">ลิตรรวม</th>
-                <th className="px-3 py-2">ค่าคอมรวม</th>
+                <th className="px-3 py-2">ค่าคอมมิชชั่นรวม (ก่อนหักหนี้)</th>
+                <th className="px-3 py-2">หักค่าคอมจากหนี้ค้างชำระ</th>
+                <th className="px-3 py-2">ค่าคอมสุทธิ</th>
                 <th className="px-3 py-2">ผู้จัดการ</th>
                 <th className="px-3 py-2">ADMIN</th>
                 <th className="px-3 py-2">ส่วนกลาง</th>
                 <th className="px-3 py-2">การตลาด</th>
-                <th className="px-3 py-2">หนี้ค้างที่ต้องพิจารณา</th>
               </tr>
             </thead>
             <tbody>
@@ -77,18 +82,19 @@ export default async function SummaryPage({ params }: { params: { id: string } }
                   <tr key={row.salesperson} className="border-t border-border">
                     <td className="px-3 py-2 font-medium">{row.salesperson}</td>
                     <td className="px-3 py-2">{row.qty.toLocaleString()}</td>
-                    <td className="px-3 py-2">{split.net.toLocaleString()}</td>
+                    <td className="px-3 py-2">{roundHalfUp2(row.commissionRaw).toLocaleString()}</td>
+                    <td className="px-3 py-2">{roundHalfUp2(row.outstanding).toLocaleString()}</td>
+                    <td className="px-3 py-2 font-medium">{split.net.toLocaleString()}</td>
                     <td className="px-3 py-2">{split.manager.toLocaleString()}</td>
                     <td className="px-3 py-2">{split.admin.toLocaleString()}</td>
                     <td className="px-3 py-2">{split.central.toLocaleString()}</td>
                     <td className="px-3 py-2">{split.sales.toLocaleString()}</td>
-                    <td className="px-3 py-2">{roundHalfUp2(row.outstanding).toLocaleString()}</td>
                   </tr>
                 );
               })}
               {summaryRows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
                     ยังไม่มีรายการที่เข้าเกณฑ์ค่าคอม
                   </td>
                 </tr>

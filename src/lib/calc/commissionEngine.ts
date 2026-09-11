@@ -11,6 +11,17 @@ export interface EligibilityConfig {
   fuelProductCodes: Set<string>;
   /** fuel-card / daily-refill customers, editable in settings, never hardcoded (spec §4.1) */
   excludedCustomerCodes: Set<string>;
+  /**
+   * department code -> whether a qualifying line must ALSO be an exact
+   * multiple of 1,000 liters (marketing-commission-calc SKILL correction,
+   * ส.ค. 2569: a quantity like 2,500 L does not partially qualify — the
+   * whole line is excluded). Defaults to `true` for any department not
+   * listed, since full-truck deliveries (A7/B7/68) are always dispatched in
+   * round-thousand increments. กรอกหลังปั๊ม (B3) is the confirmed exception —
+   * real ส.ค. 2569 data has qualifying B3 lines like 1,470.25 L — so it must
+   * be set to `false` for that department's code.
+   */
+  roundToThousandByDepartment?: Record<string, boolean>;
 }
 
 export interface CommissionThresholds {
@@ -99,6 +110,9 @@ export function calculateTransaction(
     return { ...base, blockedReason: `ไม่รู้จักแผนก '${tx.departmentCode}' — เพิ่มใน master departments ก่อน` };
   }
   if (tx.qty < minQty) return base; // below the per-line quantity threshold, silently excluded
+
+  const requiresRoundThousand = eligibility.roundToThousandByDepartment?.[tx.departmentCode] ?? true;
+  if (requiresRoundThousand && !new Decimal(tx.qty).modulo(1000).isZero()) return base; // not an exact 1,000-liter multiple, silently excluded
 
   // From here the line counts toward commission (§4.1 filter passed).
   const L = new Decimal(tx.saleValue).minus(tx.cost);

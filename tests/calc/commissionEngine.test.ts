@@ -11,6 +11,10 @@ const eligibility: EligibilityConfig = {
   minLitersByDepartment: { A7: 2000, B7: 2000, "68": 2000, B3: 1000 },
   fuelProductCodes: new Set(["DS", "DS2", "DSB20", "G91", "G95"]),
   excludedCustomerCodes: new Set(["KNDC0018"]),
+  // marketing-commission-calc SKILL correction: full-truck departments must
+  // also be an exact multiple of 1,000 L; กรอกหลังปั๊ม (B3) is the confirmed
+  // exception — real ส.ค. 2569 data has qualifying B3 lines like 1,470.25 L.
+  roundToThousandByDepartment: { A7: true, B7: true, "68": true, B3: false },
 };
 
 const config: CommissionConfig = {
@@ -162,6 +166,43 @@ describe("calculateTransaction — Q threshold and penalty, spec §4.3", () => {
       eligibility
     );
     expect(result.commission).toBe(0);
+  });
+});
+
+describe("calculateTransaction — round-to-1000 qualifying rule (marketing-commission-calc SKILL correction)", () => {
+  it("excludes a full-truck (A7) line that is >= minLiters but not an exact multiple of 1,000", () => {
+    const result = calculateTransaction(
+      b3Tx({ departmentCode: "A7", qty: 2500, fixedFreightRate: null, distanceKm: 30, cost: 50000, saleValue: 51000 }),
+      config,
+      eligibility
+    );
+    expect(result.isEligible).toBe(false);
+    expect(result.commission).toBeNull();
+  });
+
+  it("includes a full-truck (A7) line at exactly 2,000 L", () => {
+    const result = calculateTransaction(
+      b3Tx({ departmentCode: "A7", qty: 2000, fixedFreightRate: null, distanceKm: 30, cost: 50000, saleValue: 51000 }),
+      config,
+      eligibility
+    );
+    expect(result.isEligible).toBe(true);
+    expect(result.commission).not.toBeNull();
+  });
+
+  it("does NOT require round-thousand for a department not listed in roundToThousandByDepartment (defaults to true)", () => {
+    const result = calculateTransaction(
+      b3Tx({ departmentCode: "68", qty: 3500, fixedFreightRate: null, distanceKm: 30, cost: 50000, saleValue: 51000 }),
+      config,
+      { ...eligibility, minLitersByDepartment: { ...eligibility.minLitersByDepartment, "68": 2000 } }
+    );
+    expect(result.isEligible).toBe(false); // 3,500 is not a multiple of 1,000 -> excluded, default is round-required
+  });
+
+  it("still allows fractional B3 (กรอกหลังปั๊ม) quantities to qualify (round-thousand explicitly off for that department)", () => {
+    const result = calculateTransaction(b3Tx({ qty: 1470.25, cost: 50000, saleValue: 50000 + 1470.25 * 0.5 }), config, eligibility);
+    expect(result.isEligible).toBe(true);
+    expect(result.commission).not.toBeNull();
   });
 });
 

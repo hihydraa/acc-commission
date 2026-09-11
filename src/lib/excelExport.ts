@@ -206,18 +206,32 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
 
   // ---------- 2. ชีตค่าคอมรวม ----------
   const summarySheet = workbook.addWorksheet("ค่าคอมรวม");
-  summarySheet.addRow(["เซลล์", "แผนก", "ลิตรรวม", "ค่าคอมรวม (ปัด 2 ตำแหน่ง)", "หนี้ค้างที่ต้องพิจารณา"]);
+  summarySheet.addRow([
+    "เซลล์",
+    "แผนก",
+    "ลิตรรวม",
+    "ค่าคอมมิชชั่นรวม (ก่อนหักหนี้)",
+    "หักค่าคอมจากหนี้ค้างชำระ",
+    "ค่าคอมสุทธิ",
+  ]);
   summarySheet.getRow(1).font = { bold: true };
+  // net-of-debt commission (spec §4.5/§4.6) — this is what the ใบปะหน้า team
+  // split below must use, NOT the pre-deduction total, otherwise the
+  // accounting-entered outstanding_amount deduction is collected but never
+  // actually applied to the salesperson's payout.
   const roundedBySalesperson = new Map<string, number>();
   for (const agg of bySalesperson.values()) {
-    const rounded = roundHalfUp2(agg.commissionRawSum);
-    roundedBySalesperson.set(agg.salesperson, rounded);
+    const grossRounded = roundHalfUp2(agg.commissionRawSum);
+    const outstandingRounded = roundHalfUp2(agg.outstandingSum);
+    const net = roundHalfUp2(agg.commissionRawSum - agg.outstandingSum);
+    roundedBySalesperson.set(agg.salesperson, net);
     summarySheet.addRow([
       agg.salesperson,
       [...agg.departments].join(", "),
       agg.qtyTotal,
-      rounded,
-      roundHalfUp2(agg.outstandingSum),
+      grossRounded,
+      outstandingRounded,
+      net,
     ]);
   }
   summarySheet.columns.forEach((c) => (c.width = 20));

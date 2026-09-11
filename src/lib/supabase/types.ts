@@ -26,6 +26,7 @@ export interface Database {
           label: string;
           min_liters: number;
           fixed_freight: number | null;
+          require_round_thousand: boolean;
           doc_prefixes: string[];
           created_at: string;
         };

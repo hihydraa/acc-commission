@@ -38,6 +38,7 @@ export default async function ConfigSettingsPage() {
                   <th className="px-3 py-2">รหัส</th>
                   <th className="px-3 py-2">ชื่อ</th>
                   <th className="px-3 py-2">เกณฑ์ขั้นต่ำ (ลิตร)</th>
+                  <th className="px-3 py-2">ต้องลงท้ายพัน (round 1,000)</th>
                   <th className="px-3 py-2">ค่าขนส่งคงที่</th>
                   <th className="px-3 py-2">Prefix เอกสาร</th>
                 </tr>
@@ -48,6 +49,7 @@ export default async function ConfigSettingsPage() {
                     <td className="px-3 py-2">{d.code}</td>
                     <td className="px-3 py-2">{d.label}</td>
                     <td className="px-3 py-2">{d.min_liters}</td>
+                    <td className="px-3 py-2">{d.require_round_thousand ? "ใช่" : "ไม่ใช่"}</td>
                     <td className="px-3 py-2">{d.fixed_freight ?? "ตามตารางระยะทาง"}</td>
                     <td className="px-3 py-2">{d.doc_prefixes.join(", ")}</td>
                   </tr>
