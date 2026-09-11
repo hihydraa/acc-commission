@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { Nav } from "@/components/Nav";
 import { NewPeriodForm } from "./NewPeriodForm";
+import { DeletePeriodButton } from "./DeletePeriodButton";
 
 const STATUS_LABEL: Record<string, string> = {
   draft: "ร่าง",
@@ -48,9 +49,12 @@ export default async function PeriodsPage() {
                 <td className="py-2 pr-4">{STATUS_LABEL[p.status] ?? p.status}</td>
                 <td className="py-2 pr-4">{p.closed_at ? new Date(p.closed_at).toLocaleString("th-TH") : "-"}</td>
                 <td className="py-2 pr-4">
-                  <Link href={`/periods/${p.id}/upload`} className="text-primary hover:underline">
-                    เปิด
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <Link href={`/periods/${p.id}/upload`} className="text-primary hover:underline">
+                      เปิด
+                    </Link>
+                    <DeletePeriodButton periodId={p.id} label={`${p.month}/${p.year} (${p.branch})`} />
+                  </div>
                 </td>
               </tr>
             ))}

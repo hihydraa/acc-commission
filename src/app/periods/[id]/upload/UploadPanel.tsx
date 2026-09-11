@@ -32,10 +32,28 @@ interface UploadResult {
 
 export function UploadPanel({ periodId, initialSourceFiles, transactionCount }: Props) {
   const router = useRouter();
-  const [sourceFiles, setSourceFiles] = useState(initialSourceFiles);
   const [busy, setBusy] = useState<string | null>(null);
   const [results, setResults] = useState<UploadResult[]>([]);
   const [calcResult, setCalcResult] = useState<Record<string, unknown> | null>(null);
+
+  async function handleDeleteFile(file: SourceFile) {
+    const label = `${KIND_LABEL[file.kind] ?? file.kind} — ${file.filename}`;
+    const confirmMsg =
+      file.kind === "sales"
+        ? `ลบไฟล์ "${label}" — จะลบรายการที่ parse ไว้ของแผนก ${file.department_code} ในรอบนี้ทั้งหมดด้วย ยืนยัน?`
+        : file.kind === "ar"
+          ? `ลบไฟล์ "${label}" — จะลบข้อมูลลูกหนี้ค้างชำระของรอบนี้ทั้งหมดด้วย ยืนยัน?`
+          : `ลบไฟล์ "${label}"? (ข้อมูลลูกค้า/ระยะทางที่อัปเดตไว้แล้วจะยังอยู่ ไม่ถูกย้อนกลับ)`;
+    if (!confirm(confirmMsg)) return;
+    setBusy(`delete-${file.id}`);
+    const res = await fetch(`/api/periods/${periodId}/source-files/${file.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      alert(`ลบไม่สำเร็จ: ${json.error ?? res.statusText}`);
+    }
+    setBusy(null);
+    router.refresh();
+  }
 
   async function uploadOne(kind: "sales" | "ar" | "master", file: File): Promise<UploadResult> {
     const form = new FormData();
@@ -164,19 +182,28 @@ export function UploadPanel({ periodId, initialSourceFiles, transactionCount }: 
       )}
 
       <div className="rounded-lg border border-border p-4">
-        <h2 className="mb-2 text-sm font-medium">ไฟล์ที่อัปโหลดแล้ว ({sourceFiles.length})</h2>
+        <h2 className="mb-2 text-sm font-medium">ไฟล์ที่อัปโหลดแล้ว ({initialSourceFiles.length})</h2>
         <ul className="space-y-1 text-sm">
-          {sourceFiles.map((f) => (
-            <li key={f.id} className="flex items-center justify-between">
+          {initialSourceFiles.map((f) => (
+            <li key={f.id} className="flex items-center justify-between gap-3">
               <span>
                 {KIND_LABEL[f.kind] ?? f.kind} — {f.filename} {f.department_code ? `(${f.department_code})` : ""}
               </span>
-              <span className={f.checksum_ok ? "text-green-600" : "text-destructive"}>
-                {f.checksum_ok === null ? "-" : f.checksum_ok ? "checksum ผ่าน" : "checksum ไม่ผ่าน"}
+              <span className="flex items-center gap-3">
+                <span className={f.checksum_ok ? "text-green-600" : "text-destructive"}>
+                  {f.checksum_ok === null ? "-" : f.checksum_ok ? "checksum ผ่าน" : "checksum ไม่ผ่าน"}
+                </span>
+                <button
+                  onClick={() => handleDeleteFile(f)}
+                  disabled={busy !== null}
+                  className="text-destructive hover:underline disabled:opacity-50"
+                >
+                  {busy === `delete-${f.id}` ? "กำลังลบ..." : "ลบ"}
+                </button>
               </span>
             </li>
           ))}
-          {sourceFiles.length === 0 && <li className="text-muted-foreground">ยังไม่มีไฟล์</li>}
+          {initialSourceFiles.length === 0 && <li className="text-muted-foreground">ยังไม่มีไฟล์</li>}
         </ul>
       </div>
 

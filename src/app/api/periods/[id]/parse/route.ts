@@ -141,7 +141,26 @@ async function handlePost(request: Request, { params }: { params: { id: string }
     });
     if (sourceFileError) return NextResponse.json({ error: sourceFileError.message }, { status: 500 });
 
-    const rows = parsed.rows.map((r) => ({
+    // Postgres rejects an upsert batch that hits the same conflict target
+    // (period_id, base_doc_no) twice in one statement ("ON CONFLICT DO
+    // UPDATE command cannot affect row a second time") — real AR reports
+    // can list the same document more than once (e.g. repeated across
+    // aging buckets). Collapse to one row per base_doc_no (last occurrence
+    // wins) and surface a warning so accounting can sanity-check any where
+    // the amounts actually differed between occurrences.
+    const byBaseDocNo = new Map<string, (typeof parsed.rows)[number]>();
+    const duplicateWarnings: string[] = [];
+    for (const r of parsed.rows) {
+      const existing = byBaseDocNo.get(r.baseDocNo);
+      if (existing && existing.outstanding !== r.outstanding) {
+        duplicateWarnings.push(
+          `เอกสาร ${r.baseDocNo} ปรากฏซ้ำในรายงานด้วยยอดค้างต่างกัน (${existing.outstanding} vs ${r.outstanding}) — ใช้ค่าล่าสุด โปรดตรวจสอบ`
+        );
+      }
+      byBaseDocNo.set(r.baseDocNo, r);
+    }
+
+    const rows = [...byBaseDocNo.values()].map((r) => ({
       period_id: periodId,
       base_doc_no: r.baseDocNo,
       customer_code: r.customerCode,
@@ -157,7 +176,11 @@ async function handlePost(request: Request, { params }: { params: { id: string }
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, rowCount: rows.length, warnings: parsed.warnings });
+    return NextResponse.json({
+      ok: true,
+      rowCount: rows.length,
+      warnings: [...parsed.warnings, ...duplicateWarnings],
+    });
   }
 
   if (kind === "master") {
