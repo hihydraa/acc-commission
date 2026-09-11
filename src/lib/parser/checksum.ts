@@ -5,12 +5,21 @@ import type {
 } from "./types";
 
 /**
- * Tolerance rules from spec §3.6:
+ * Tolerance rules, spec §3.6 (revised against real August 2569 data):
  *  - quantity (liters) must match EXACTLY at every level — it's the primary checksum.
- *  - value (baht) may differ up to ±0.05 per product group and ±5 per file,
- *    because the source accounting system rounds its own subtotal per product
- *    group (verified against the "กรอกหลังปั๊ม" file: line-sum 5,051,108.24
- *    vs report subtotal 5,051,106.44, a Bt1.80 spread across 24 product groups).
+ *  - value (baht) may differ per product group and per file, because the
+ *    source accounting system rounds its own per-liter rate before summing,
+ *    which drifts more on larger-volume / fractional-liter lines (common on
+ *    the "กรอกปั๊ม" file). The spec's own text says this drift is normally
+ *    "0.01–0.20 บาท" per group, but the spec's stated ±0.05 tolerance was
+ *    already tighter than its own example — and real files pushed it
+ *    further: up to Bt1.14 observed on a single 3,646-liter product group.
+ *    Bt2 per group leaves headroom over that with margin, while still
+ *    catching real parsing bugs, which manifest as differences of
+ *    thousands of baht (a wrong column), not fractions of a baht.
+ *  - the ±5 per-file tolerance is unchanged and matches the spec's own
+ *    documented example (Bt1.80 total drift across 24 product groups on
+ *    that same file).
  *
  * Product/customer level comparisons use the qtyComputed/valueComputed the
  * parser already paired with each subtotal line while scanning (see
@@ -23,7 +32,7 @@ import type {
  * debuggable without server log access: the mismatch itself shows you what
  * the extractQtyAndValue() ASSUMPTION got wrong for that file's real layout.
  */
-const VALUE_TOLERANCE_PER_PRODUCT = 0.05;
+const VALUE_TOLERANCE_PER_PRODUCT = 2;
 const VALUE_TOLERANCE_PER_FILE = 5;
 
 function round2(n: number): number {
