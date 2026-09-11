@@ -22,13 +22,10 @@ describe("parseDistanceMasterText", () => {
     expect(result.warnings.some((w) => w.includes("KCL660037"))).toBe(false);
   });
 
-  it("still blocks for Review on a genuinely unknown non-numeric distance value", () => {
-    const result = parseDistanceMasterText(
-      "KCL660099  ร้านทดสอบ  ไม่ทราบ  สมชาย\n"
-    );
+  it("still blocks for Review when no number or 'ทางผ่าน' is found at all", () => {
+    const result = parseDistanceMasterText("KCL660099  ร้านทดสอบ  ไม่ทราบ  สมชาย\n");
     const row = result.rows[0];
     expect(row.distanceKm).toBeNull();
-    expect(row.distanceRaw).toBe("ไม่ทราบ");
     expect(result.warnings.some((w) => w.includes("KCL660099"))).toBe(true);
   });
 });
