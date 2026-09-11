@@ -3,11 +3,16 @@ import type { ParsedDistanceMaster, DistanceMasterRow } from "./types";
 /**
  * Parses the "ระยะทาง + เซลล์" master file (customer code -> distance km +
  * assigned salesperson). Spec gives no literal line excerpt for this file
- * either — only that it maps customer_code -> distance_km + salesperson,
- * and the critical edge case (§8): customer KCL660037 has the distance
- * column filled with the text "ทางผ่าน" (not a number) instead of a km
- * value, which must surface as a Review item every month rather than being
- * silently coerced to 0 or NaN.
+ * either — only that it maps customer_code -> distance_km + salesperson.
+ *
+ * "ทางผ่าน" (customer is along the route to another stop, e.g. KCL660037)
+ * means distance = 0 km — confirmed directly by the user, overriding the
+ * original spec text (§8) which said this must always queue for Review.
+ * 0 km still routes through the normal freight tier table and lands in the
+ * "< 20 km -> 0 baht/liter" bracket, so this is really just a plain
+ * zero-distance entry, not a special case needing manual freight input.
+ * Any OTHER non-numeric distance text (not literally "ทางผ่าน") still
+ * blocks for Review — that's a genuinely unknown case, not a confirmed one.
  *
  * This is deliberately a permissive, best-effort line scanner (one master
  * row per line, columns separated by 2+ spaces as typically produced by
@@ -60,9 +65,11 @@ export function parseDistanceMasterText(text: string): ParsedDistanceMaster {
         continue;
       }
       if (distanceRaw === "" && THAI_TEXT_RE.test(tok)) {
-        // non-numeric distance column, e.g. "ทางผ่าน" -> must go to Review, never silently 0
         distanceRaw = tok;
-        distanceKm = null;
+        // "ทางผ่าน" = pass-through stop = 0 km (confirmed business rule).
+        // Any other non-numeric text is a genuinely unknown case and still
+        // blocks for Review rather than guessing.
+        distanceKm = tok.replace(/\s+/g, "") === "ทางผ่าน" ? 0 : null;
         continue;
       }
       salesperson = tok;

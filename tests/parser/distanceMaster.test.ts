@@ -14,11 +14,21 @@ describe("parseDistanceMasterText", () => {
     expect(row.salesperson).toBe("อ้อม");
   });
 
-  it("surfaces the 'ทางผ่าน' (non-numeric distance) edge case as null + warning, spec §8", () => {
+  it("treats 'ทางผ่าน' as 0 km — confirmed business rule (pass-through stop), no Review needed", () => {
     const result = parseDistanceMasterText(SAMPLE);
     const row = result.rows.find((r) => r.customerCode === "KCL660037")!;
-    expect(row.distanceKm).toBeNull();
+    expect(row.distanceKm).toBe(0);
     expect(row.distanceRaw).toBe("ทางผ่าน");
-    expect(result.warnings.some((w) => w.includes("KCL660037"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("KCL660037"))).toBe(false);
+  });
+
+  it("still blocks for Review on a genuinely unknown non-numeric distance value", () => {
+    const result = parseDistanceMasterText(
+      "KCL660099  ร้านทดสอบ  ไม่ทราบ  สมชาย\n"
+    );
+    const row = result.rows[0];
+    expect(row.distanceKm).toBeNull();
+    expect(row.distanceRaw).toBe("ไม่ทราบ");
+    expect(result.warnings.some((w) => w.includes("KCL660099"))).toBe(true);
   });
 });

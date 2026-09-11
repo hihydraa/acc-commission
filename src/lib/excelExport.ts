@@ -108,6 +108,11 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "KN Commission System";
   workbook.created = new Date();
+  // Without this, some Excel/viewer apps display formula cells as blank or
+  // stale (0) until the user manually recalculates (F9/Ctrl+Alt+F9) — a
+  // freshly generated file with no cached formula results looks like
+  // "nothing was calculated" even though every formula is correct.
+  workbook.calcProperties.fullCalcOnLoad = true;
 
   const { thresholds, ratePerLiter, penaltyNegativeQEnabled } = input.config;
 
@@ -120,6 +125,14 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
     const deptRows = input.rows.filter((r) => r.departmentCode === dept.code);
     deptRows.forEach((r, idx) => {
       const excelRow = idx + 2; // header is row 1
+      // Only write the live N-R formulas when M (freight rate) is an actual
+      // resolved number. N/O/P/Q reference M{row} in-formula, and Excel
+      // treats a blank M cell as 0 — so a blocked row (missing distance,
+      // >209km) or an out-of-scope row (below qty threshold, non-fuel,
+      // excluded customer) would otherwise silently show a computed
+      // commission as if freight were free, instead of "not calculated".
+      // L is safe either way — it's pure G-H, independent of M.
+      const hasFreight = r.freightRate !== null;
       sheet.addRow([
         r.docNo,
         r.docDate,
@@ -134,16 +147,18 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
         r.isOneWay,
         { formula: `G${excelRow}-H${excelRow}` }, // L
         r.freightRate, // M — backend-computed value (lookup/BLOCK/one-way logic)
-        { formula: `M${excelRow}*F${excelRow}` }, // N
-        { formula: `N${excelRow}+H${excelRow}` }, // O
-        { formula: `G${excelRow}-O${excelRow}` }, // P
-        { formula: `IF(F${excelRow}=0,0,P${excelRow}/F${excelRow})` }, // Q
-        {
-          formula:
-            `IF(Q${excelRow}<0,` +
-            `IF(${penaltyNegativeQEnabled ? "TRUE" : "FALSE"},-${ratePerLiter}*F${excelRow},0),` +
-            `IF(Q${excelRow}>=IF(I${excelRow}="cash",${thresholds.cash},IF(I${excelRow}="credit",${thresholds.credit},${thresholds.overdue})),${ratePerLiter}*F${excelRow},0))`,
-        }, // R
+        hasFreight ? { formula: `M${excelRow}*F${excelRow}` } : "", // N
+        hasFreight ? { formula: `N${excelRow}+H${excelRow}` } : "", // O
+        hasFreight ? { formula: `G${excelRow}-O${excelRow}` } : "", // P
+        hasFreight ? { formula: `IF(F${excelRow}=0,0,P${excelRow}/F${excelRow})` } : "", // Q
+        hasFreight
+          ? {
+              formula:
+                `IF(Q${excelRow}<0,` +
+                `IF(${penaltyNegativeQEnabled ? "TRUE" : "FALSE"},-${ratePerLiter}*F${excelRow},0),` +
+                `IF(Q${excelRow}>=IF(I${excelRow}="cash",${thresholds.cash},IF(I${excelRow}="credit",${thresholds.credit},${thresholds.overdue})),${ratePerLiter}*F${excelRow},0))`,
+            }
+          : "", // R
         r.blockedReason ?? "",
         r.flags.join("; "),
         r.outstandingAmount ?? 0,
