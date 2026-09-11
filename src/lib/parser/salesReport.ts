@@ -19,13 +19,12 @@ import type {
  * lines from those files and match the spec's known-correct §3.6 totals
  * exactly.
  *
- * ⚠️ STILL UNVERIFIED against a real file: the SALE-LINE column order
- * (doc_no/date/qty/sale_value/cost/customer_code/...) and the header/
- * column-header skip markers in SKIP_LINE_MARKERS. Those happened to work
- * correctly for the qty totals in the files checked so far (every qty
- * checksum passed), but haven't been stress-tested the way the subtotal
- * line layout has. If a future file fails checksum on qty (not just
- * value), suspect this part next.
+ * The SALE-LINE column order (doc_no/date/qty/sale_value/cost/
+ * customer_code/...) and header/column-header skip markers are confirmed
+ * against real files too now (เทรลเลอร์68, ส.ค. 69 — the qty total came out
+ * as exactly 0 the first time this ran against a real file that needed the
+ * pdfjs-dist fallback, tracked down to leadingSpaces indentation detection:
+ * see CUSTOMER_CODE_RE below).
  *
  * The mandatory checksum (§3.6) fails loudly rather than silently
  * producing wrong commission numbers when any assumption here is wrong —
@@ -37,6 +36,28 @@ const SALE_LINE_RE = /^(\S.*?)\s+(\d{2}\/\d{2}\/\d{2})\s+(.*)$/;
 // anchored at the end — subtotal lines have more tokens (qty/value/"ลิตร")
 // trailing after the code, unlike plain header lines.
 const CODE_SUFFIX_RE = /^(.+?)\s*\/\s*(\S+)/;
+
+/**
+ * Distinguishes a customer header ("ปมปุบริการ /KCL660037") from a product
+ * header ("ดีเซล-1 /DS") by the CODE'S SHAPE, not indentation.
+ *
+ * This used to key off leading-whitespace indentation (customer headers
+ * un-indented, product headers indented) — but that broke completely on
+ * the one real file that needed the pdfjs-dist extraction fallback:
+ * modern pdf.js collapses all leading/repeated whitespace to single spaces
+ * (see pdfExtract.ts), so every line came out with zero indentation and
+ * every product header got misread as a customer header, silently
+ * corrupting `currentProductCode` for every following sale line. The old
+ * pdf-parse path happens to preserve raw spacing (its bundled pdf.js is
+ * old enough to not normalize it), which is why this worked before.
+ *
+ * Customer codes are 2-5 letters immediately followed by 4+ digits with
+ * nothing after (KCL660037, KNDC0018). No known product code matches this
+ * shape — they're either pure letters (DSKN) or end in letters after the
+ * digits (B20KN, G91KN) or have too few trailing digits (DS2, G91) — so
+ * this distinguishes the two regardless of whitespace fidelity.
+ */
+const CUSTOMER_CODE_RE = /^[A-Za-z]{2,5}\d{4,}$/;
 
 const SKIP_LINE_MARKERS = [
   "หน้า",
@@ -134,7 +155,6 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
     const raw = rawLines[i];
     const trimmed = raw.trim();
     if (!trimmed) continue;
-    const leadingSpaces = raw.length - raw.trimStart().length;
 
     if (SKIP_LINE_MARKERS.some((m) => trimmed.includes(m))) continue;
     if (COMPANY_LINE_RE.test(trimmed)) continue;
@@ -169,7 +189,7 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
     }
 
     const saleMatch = trimmed.match(SALE_LINE_RE);
-    if (saleMatch && leadingSpaces > 0) {
+    if (saleMatch) {
       const [, docNoRaw, date, restRaw] = saleMatch;
       const rest = restRaw.trim().split(/\s+/).filter(Boolean);
       const qty = parseThaiNumber(rest[0]);
@@ -222,7 +242,7 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
       // "ดีเซล-1", "ดีเซลบี20"). A subtotal line is distinguished by having
       // an actual decimal-formatted number and/or the "ลิตร" unit label.
       const hasNumericData = /\d+\.\d+/.test(trimmed) || /ลิตร/.test(trimmed);
-      if (hasNumericData && /ลิตร/.test(trimmed) && leadingSpaces > 0) {
+      if (hasNumericData && /ลิตร/.test(trimmed)) {
         // product subtotal line — closes the current product block
         const { qty, value } = extractQtyAndValue(trimmed);
         result.productSubtotals.push({
@@ -238,15 +258,14 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
         productBlockValue = 0;
         continue;
       }
-      if (!hasNumericData && leadingSpaces > 0) {
-        // product header
-        currentProductCode = headerMatch[2].toUpperCase();
-        currentProductName = headerMatch[1].trim();
-        continue;
-      }
-      if (!hasNumericData && leadingSpaces === 0) {
-        // customer header
-        currentCustomerNameRaw = headerMatch[1].trim();
+      if (!hasNumericData) {
+        const code = headerMatch[2].toUpperCase();
+        if (CUSTOMER_CODE_RE.test(code)) {
+          currentCustomerNameRaw = headerMatch[1].trim();
+        } else {
+          currentProductCode = code;
+          currentProductName = headerMatch[1].trim();
+        }
         continue;
       }
     }
