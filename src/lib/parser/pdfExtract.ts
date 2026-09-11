@@ -44,7 +44,14 @@ async function extractPdfTextWithPdfjs(buffer: Buffer): Promise<string> {
   const pageTexts: string[] = [];
   for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
     const page = await doc.getPage(pageNum);
-    const content = await page.getTextContent();
+    // disableNormalization: true preserves the original inter-word spacing
+    // (pdf.js otherwise collapses all whitespace to single standard
+    // spaces) — our line parsers depend on that raw spacing for
+    // leadingSpaces indentation detection and \s+ token splitting.
+    // Omitting this produced text with every sale line silently
+    // unparseable on the one file that needed this fallback (checksum
+    // caught it — computed 0 lines — but it needed fixing regardless).
+    const content = await page.getTextContent({ disableNormalization: true });
     // mirrors pdf-parse's own render_page join behavior (spec §9 parity):
     // same Y-transform -> same line, different Y -> new line.
     let lastY: number | undefined;
