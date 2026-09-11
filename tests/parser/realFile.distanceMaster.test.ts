@@ -78,10 +78,19 @@ const REAL_MASTER_TEXT = `
 21ปั๊มปุ๊บริการKCL660037อ.กระนวนทางผ่านอ้อม`;
 
 describe("parseDistanceMasterText — real ระยะทาง+เซลล์ file (branch กระนวน)", () => {
-  it("finds all 20 distinct customer codes (21 rows, one code repeated) with no warnings", () => {
+  it("finds all 21 rows / 20 distinct customer codes (KN58325 repeated) with no warnings", () => {
     const result = parseDistanceMasterText(REAL_MASTER_TEXT);
-    expect(result.rows).toHaveLength(20);
+    expect(result.rows).toHaveLength(21);
+    expect(new Set(result.rows.map((r) => r.customerCode)).size).toBe(20);
     expect(result.warnings).toHaveLength(0);
+  });
+
+  it("finds KN58060 even though its row's stray digits are glued directly onto the code with no space (real bug: previously dropped entirely)", () => {
+    const result = parseDistanceMasterText(REAL_MASTER_TEXT);
+    const row = result.rows.find((r) => r.customerCode === "KN58060");
+    expect(row).toBeDefined();
+    expect(row!.distanceKm).toBe(11);
+    expect(row!.salesperson).toBe("อ้อม");
   });
 
   it("extracts distance + salesperson correctly for a plain numeric row", () => {

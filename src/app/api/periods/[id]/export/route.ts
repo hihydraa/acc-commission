@@ -27,6 +27,8 @@ async function handleGet(_request: Request, { params }: { params: { id: string }
   const { data: transactions } = await db.from("transactions").select("*").eq("period_id", periodId);
   const { data: departments } = await db.from("departments").select("*");
   const { data: configRows } = await db.from("commission_config").select("*");
+  const { data: arRows } = await db.from("ar_outstanding").select("base_doc_no, outstanding").eq("period_id", periodId);
+  const arOutstandingByBaseDocNo = new Map((arRows ?? []).map((a) => [a.base_doc_no, a.outstanding]));
 
   if (!period) return NextResponse.json({ error: "period not found" }, { status: 404 });
 
@@ -90,6 +92,10 @@ async function handleGet(_request: Request, { params }: { params: { id: string }
       blockedReason: t.blocked_reason,
       flags: (t.flags as string[]) ?? [],
       outstandingAmount: t.outstanding_amount,
+      // reference-only figure from the AR report itself (spec §4.5 /
+      // marketing-commission-calc SKILL "หักหนี้ค้างชำระ" sheet) — NOT what
+      // gets deducted (outstandingAmount, the accounting-entered figure, is)
+      arOutstandingReference: arOutstandingByBaseDocNo.get(t.base_doc_no) ?? null,
       salesperson: customer?.salesperson ?? null,
     };
   });

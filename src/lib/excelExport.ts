@@ -4,12 +4,21 @@ import { splitTeam, type TeamSplitConfig } from "./calc/teamSplit";
 import type { SaleType } from "./calc/commissionEngine";
 
 /**
- * Builds the 4-sheet export workbook described in spec §7:
- *  1. one sheet per department (A-U columns, L-R as real Excel formulas so
- *     accounting can audit/re-derive them, not just read a frozen number)
- *  2. ชีตค่าคอมรวม — totals per salesperson (เซลล์)
- *  3. ชีตใบปะหน้า — team % split per salesperson
- *  4. ชีตหมายเหตุ — flags / blocked rows / audit notes for this period
+ * Builds the export workbook, matching the sheet layout the
+ * marketing-commission-calc SKILL / Template_คำนวณค่าคอมการตลาด.xlsx
+ * describe as the required output shape:
+ *  1. Master — one row per customer referenced this period (เซลล์/ระยะทาง/Tag),
+ *     so a reviewer can see where each per-row VLOOKUP-equivalent came from
+ *     without hunting through Settings.
+ *  2. one sheet per department (all rows, not pre-filtered — a non-qualifying
+ *     or blocked row must still be visible with its formula evaluating to
+ *     blank/0, not omitted) with two summary rows at the bottom.
+ *  3. หักหนี้ค้างชำระ — one row per transaction accounting entered a debt
+ *     deduction for, plus a total row.
+ *  4. ค่าคอมรวม — ก่อนหักหนี้ / หักหนี้ / สุทธิ per salesperson (เซลล์).
+ *  5. ใบปะหน้า — team % split per salesperson, computed off the NET
+ *     (post-deduction) column above.
+ *  6. หมายเหตุ — flags / blocked rows / audit notes for this period.
  *
  * L (กำไรขั้นต้น) and N-Q are straightforward arithmetic on other columns in
  * the same row, so those become real formulas. R (ค่าคอม) is also emitted as
@@ -34,10 +43,16 @@ export interface ExportTransactionRow {
   isOneWay: boolean;
   freightRate: number | null;
   commission: number | null; // R, unrounded — null when blocked/ineligible
+  /** true once the row passed product/customer/qty/round-1000 scope, even if
+   *  freight is still blocked pending Review — matches the "เข้าเกณฑ์ปริมาณ
+   *  (1/0)" column in the SKILL/Template output (see commissionEngine.ts) */
   isEligible: boolean;
   blockedReason: string | null;
   flags: string[];
+  /** accounting-entered deduction (spec §4.5) — this IS what gets subtracted */
   outstandingAmount: number | null;
+  /** reference-only figure from the AR report itself, NOT what gets deducted */
+  arOutstandingReference: number | null;
   salesperson: string | null;
 }
 
@@ -73,34 +88,45 @@ export interface ExportInput {
   notes: AuditNoteEntry[];
 }
 
-const HEADER = [
-  "เลขที่เอกสาร",
+// Column order matches the per-truck sheet layout in
+// marketing-commission-calc/skills/.../references/formulas.md (A ลำดับ … K
+// ต้นทุนขายสุทธิ, L-R the formula columns, S ประเภท, T เซลล์, U ค่าคอม, plus the
+// V "เข้าเกณฑ์ปริมาณ" helper column added after the ส.ค. 2569 review).
+const DEPT_HEADER = [
+  "ลำดับ",
   "วันที่",
+  "เลขที่เอกสาร",
   "รหัสลูกค้า",
   "ชื่อลูกค้า",
   "สินค้า",
-  "ปริมาณ",
+  "ระยะทาง(กม.)",
+  "Tag",
+  "ปริมาณขายสุทธิ(ลิตร)",
   "มูลค่าขาย",
   "ต้นทุนขายสุทธิ",
+  "กำไรขั้นต้น",
+  "ค่าขนส่ง/ลิตร",
+  "ค่าขนส่งรวม",
+  "ต้นทุนรวม",
+  "กำไรหลังหักขนส่ง",
+  "กำไรต่อลิตร",
   "ประเภท",
-  "ระยะทาง(กม.)",
-  "1สาย1สู้",
-  "กำไรขั้นต้น(L)",
-  "ค่าขนส่ง/ลิตร(M)",
-  "ค่าขนส่งรวม(N)",
-  "ต้นทุนรวม(O)",
-  "กำไรหลังหักค่าขนส่ง(P)",
-  "กำไรต่อลิตร(Q)",
-  "ค่าคอม(R)",
-  "สาเหตุที่ถูก Block",
-  "หมายเหตุ/Flag",
-  "หนี้ค้างที่ต้องพิจารณา",
+  "เซลล์",
+  "ค่าคอม",
+  "หมายเหตุ",
+  "เข้าเกณฑ์ปริมาณ(1/0)",
 ];
 
 function saleTypeLabel(t: SaleType | null): string {
   if (t === "cash") return "ขายสด";
   if (t === "credit") return "ขายเชื่อ";
   if (t === "overdue") return "ลูกหนี้ค้างชำระ";
+  return "";
+}
+
+function tagLabel(r: ExportTransactionRow): string {
+  if (r.isOneWay) return "1สาย1สู้";
+  if (r.distanceKm === 0) return "ทางผ่าน";
   return "";
 }
 
@@ -116,66 +142,108 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
 
   const { thresholds, ratePerLiter, penaltyNegativeQEnabled } = input.config;
 
-  // ---------- 1. per-department sheets ----------
+  // ---------- 1. Master ----------
+  // One row per distinct customer referenced by a transaction this period —
+  // the SKILL/Template require a Master sheet inside the workbook itself
+  // (not just an external reference) so a reviewer can see the
+  // ระยะทาง/เซลล์/Tag that drove each row's numbers without leaving the file.
+  const masterSheet = workbook.addWorksheet("Master");
+  masterSheet.addRow(["รหัสลูกค้า", "ชื่อลูกค้า", "เซลล์", "ระยะทาง(กม.)", "Tag", "หมายเหตุ"]);
+  masterSheet.getRow(1).font = { bold: true };
+  const seenCustomers = new Set<string>();
+  for (const r of input.rows) {
+    if (!r.customerCode || seenCustomers.has(r.customerCode)) continue;
+    seenCustomers.add(r.customerCode);
+    masterSheet.addRow([
+      r.customerCode,
+      r.customerName ?? "",
+      r.salesperson ?? "",
+      r.distanceKm,
+      tagLabel(r),
+      !r.salesperson ? "⚠ ไม่มีเซลล์ในระบบ — เพิ่มในหน้าตั้งค่า > ลูกค้า" : "",
+    ]);
+  }
+  masterSheet.columns.forEach((c) => (c.width = 20));
+  masterSheet.getColumn(2).width = 28;
+
+  // ---------- 2. per-department sheets ----------
   for (const dept of input.departments) {
     const sheet = workbook.addWorksheet(dept.label.slice(0, 31));
-    sheet.addRow(HEADER);
+    sheet.addRow(DEPT_HEADER);
     sheet.getRow(1).font = { bold: true };
 
     const deptRows = input.rows.filter((r) => r.departmentCode === dept.code);
     deptRows.forEach((r, idx) => {
       const excelRow = idx + 2; // header is row 1
-      // Only write the live N-R formulas when M (freight rate) is an actual
+      // Only write the live L-R formulas when M (freight rate) is an actual
       // resolved number. N/O/P/Q reference M{row} in-formula, and Excel
       // treats a blank M cell as 0 — so a blocked row (missing distance,
       // >209km) or an out-of-scope row (below qty threshold, non-fuel,
       // excluded customer) would otherwise silently show a computed
       // commission as if freight were free, instead of "not calculated".
-      // L is safe either way — it's pure G-H, independent of M.
       const hasFreight = r.freightRate !== null;
       sheet.addRow([
-        r.docNo,
+        idx + 1,
         r.docDate,
+        r.docNo,
         r.customerCode,
         r.customerName,
         r.productCode,
+        r.distanceKm,
+        tagLabel(r),
         r.qty,
         r.saleValue,
         r.cost,
+        { formula: `J${excelRow}-K${excelRow}` }, // L กำไรขั้นต้น
+        r.freightRate, // M ค่าขนส่ง/ลิตร — backend-computed value (lookup/BLOCK/one-way/fixed logic)
+        hasFreight ? { formula: `M${excelRow}*I${excelRow}` } : "", // N ค่าขนส่งรวม
+        hasFreight ? { formula: `N${excelRow}+K${excelRow}` } : "", // O ต้นทุนรวม
+        hasFreight ? { formula: `J${excelRow}-O${excelRow}` } : "", // P กำไรหลังหักขนส่ง
+        hasFreight ? { formula: `IF(I${excelRow}=0,0,P${excelRow}/I${excelRow})` } : "", // Q กำไรต่อลิตร
         r.saleType ?? "",
-        r.distanceKm,
-        r.isOneWay,
-        { formula: `G${excelRow}-H${excelRow}` }, // L
-        r.freightRate, // M — backend-computed value (lookup/BLOCK/one-way logic)
-        hasFreight ? { formula: `M${excelRow}*F${excelRow}` } : "", // N
-        hasFreight ? { formula: `N${excelRow}+H${excelRow}` } : "", // O
-        hasFreight ? { formula: `G${excelRow}-O${excelRow}` } : "", // P
-        hasFreight ? { formula: `IF(F${excelRow}=0,0,P${excelRow}/F${excelRow})` } : "", // Q
+        r.salesperson ?? "",
         hasFreight
           ? {
               formula:
                 `IF(Q${excelRow}<0,` +
-                `IF(${penaltyNegativeQEnabled ? "TRUE" : "FALSE"},-${ratePerLiter}*F${excelRow},0),` +
-                `IF(Q${excelRow}>=IF(I${excelRow}="cash",${thresholds.cash},IF(I${excelRow}="credit",${thresholds.credit},${thresholds.overdue})),${ratePerLiter}*F${excelRow},0))`,
+                `IF(${penaltyNegativeQEnabled ? "TRUE" : "FALSE"},-${ratePerLiter}*I${excelRow},0),` +
+                `IF(Q${excelRow}>=IF(R${excelRow}="cash",${thresholds.cash},IF(R${excelRow}="credit",${thresholds.credit},${thresholds.overdue})),${ratePerLiter}*I${excelRow},0))`,
             }
-          : "", // R
-        r.blockedReason ?? "",
-        r.flags.join("; "),
-        r.outstandingAmount ?? 0,
+          : "", // R ค่าคอม
+        [r.blockedReason, ...r.flags].filter(Boolean).join("; "),
+        r.isEligible ? 1 : 0, // เข้าเกณฑ์ปริมาณ(1/0)
       ]);
       // display sale_type as Thai label but keep the underlying formula
-      // matching against the raw 'cash'/'credit'/'overdue' code in column I —
-      // write the raw code so the R formula above resolves correctly, and
-      // show the label in a comment instead of overwriting the cell value.
-      const iCell = sheet.getCell(`I${excelRow}`);
-      iCell.value = r.saleType ?? "";
-      iCell.note = saleTypeLabel(r.saleType);
+      // matching against the raw 'cash'/'credit'/'overdue' code in column R —
+      // write the raw code so the formula above resolves correctly, and show
+      // the label in a comment instead of overwriting the cell value.
+      const rCell = sheet.getCell(`R${excelRow}`);
+      rCell.value = r.saleType ?? "";
+      rCell.note = saleTypeLabel(r.saleType);
     });
+
+    const lastRow = deptRows.length + 1;
+    if (deptRows.length > 0) {
+      // leave row lastRow+1 blank as a visual separator — getRow() below
+      // creates rows on demand, so skipping straight to lastRow+2/+3 here
+      // (rather than an extra addRow([]) call, which would instead land ON
+      // lastRow+1 and collide with it) actually leaves it untouched.
+      const totalRow = lastRow + 2;
+      const qualifyingRow = lastRow + 3;
+      sheet.getRow(totalRow).getCell(5).value = "รวมทั้งชีท";
+      sheet.getRow(totalRow).getCell(9).value = { formula: `SUM(I2:I${lastRow})` };
+      sheet.getRow(totalRow).getCell(20).value = { formula: `SUM(T2:T${lastRow})` };
+      sheet.getRow(qualifyingRow).getCell(5).value = "รวมเฉพาะรายการที่เข้าเกณฑ์ค่าคอม";
+      sheet.getRow(qualifyingRow).getCell(9).value = { formula: `SUMIF(V2:V${lastRow},1,I2:I${lastRow})` };
+      sheet.getRow(qualifyingRow).getCell(20).value = { formula: `SUM(T2:T${lastRow})` };
+      sheet.getRow(totalRow).font = { bold: true };
+      sheet.getRow(qualifyingRow).font = { bold: true };
+    }
 
     sheet.columns.forEach((col) => {
       col.width = 16;
     });
-    sheet.getColumn(4).width = 28; // customer name
+    sheet.getColumn(5).width = 28; // customer name
   }
 
   // ---------- aggregate per salesperson (เซลล์) ----------
@@ -204,7 +272,44 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
     bySalesperson.set(key, agg);
   }
 
-  // ---------- 2. ชีตค่าคอมรวม ----------
+  // ---------- 3. หักหนี้ค้างชำระ ----------
+  const debtSheet = workbook.addWorksheet("หักหนี้ค้างชำระ");
+  debtSheet.addRow([
+    "รหัสลูกค้า",
+    "ชื่อลูกค้า",
+    "เอกสาร#",
+    "วันที่",
+    "ลิตรที่ต้องนำมาหักค่าคอม",
+    "เซลล์",
+    "ค่าคอมของรายการนี้ (หัก)",
+    "ยอดคงค้างตามรายงานลูกหนี้ (อ้างอิงเท่านั้น)",
+  ]);
+  debtSheet.getRow(1).font = { bold: true };
+  const debtRows = input.rows.filter((r) => (r.outstandingAmount ?? 0) > 0);
+  for (const r of debtRows) {
+    debtSheet.addRow([
+      r.customerCode,
+      r.customerName,
+      r.docNo,
+      r.docDate,
+      r.qty,
+      r.salesperson,
+      r.outstandingAmount,
+      r.arOutstandingReference,
+    ]);
+  }
+  if (debtRows.length > 0) {
+    const totalRow = debtRows.length + 2;
+    debtSheet.getRow(totalRow).getCell(1).value = "รวม";
+    debtSheet.getRow(totalRow).getCell(7).value = { formula: `SUM(G2:G${debtRows.length + 1})` };
+    debtSheet.getRow(totalRow).font = { bold: true };
+  } else {
+    debtSheet.addRow(["ไม่พบรายการค้างชำระที่ตรงกับรายการเข้าเกณฑ์เดือนนี้"]);
+  }
+  debtSheet.columns.forEach((c) => (c.width = 20));
+  debtSheet.getColumn(2).width = 28;
+
+  // ---------- 4. ค่าคอมรวม ----------
   const summarySheet = workbook.addWorksheet("ค่าคอมรวม");
   summarySheet.addRow([
     "เซลล์",
@@ -234,13 +339,14 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
       net,
     ]);
   }
+  summarySheet.addRow([
+    "⚠ ก่อนส่งมอบไฟล์: เช็คว่า 'ค่าคอมมิชชั่นรวม (ก่อนหักหนี้)' รวมทุกเซลล์เท่ากับผลรวมแถว 'รวมทั้งชีท' ของทุกชีทแผนก — ถ้าไม่ตรงกันคือบั๊ก ต้องตามหาก่อนส่ง",
+  ]);
   summarySheet.columns.forEach((c) => (c.width = 20));
 
-  // ---------- 3. ชีตใบปะหน้า ----------
+  // ---------- 5. ใบปะหน้า ----------
   const coverSheet = workbook.addWorksheet("ใบปะหน้า");
-  coverSheet.addRow([
-    `รอบ ${input.period.month}/${input.period.year} — สาขา${input.period.branch}`,
-  ]);
+  coverSheet.addRow([`รอบ ${input.period.month}/${input.period.year} — สาขา${input.period.branch}`]);
   coverSheet.addRow([]);
   coverSheet.addRow(["เซลล์", "สุทธิ", "ผู้จัดการ (10%)", "ADMIN (20%)", "ส่วนกลาง (10%)", "การตลาด (รับเศษ)"]);
   coverSheet.getRow(3).font = { bold: true };
@@ -250,7 +356,7 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
   }
   coverSheet.columns.forEach((c) => (c.width = 20));
 
-  // ---------- 4. ชีตหมายเหตุ ----------
+  // ---------- 6. หมายเหตุ ----------
   const notesSheet = workbook.addWorksheet("หมายเหตุ");
   notesSheet.addRow(["ประเภท", "เอกสาร/ลูกค้า", "รายละเอียด"]);
   notesSheet.getRow(1).font = { bold: true };

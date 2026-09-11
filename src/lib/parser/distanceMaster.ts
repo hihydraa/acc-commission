@@ -31,7 +31,18 @@ import type { ParsedDistanceMaster, DistanceMasterRow } from "./types";
  */
 
 // 4+ digits, not 5+ — a real code in this file ("KNB6001") has only 4.
-const CUSTOMER_CODE_RE = /\b([A-Za-z]{1,5}\d{4,})\b/g;
+//
+// The leading boundary is a negative lookbehind for a Latin letter, NOT
+// `\b` — a real row in this file can have its sequence number (or other
+// stray digits from the source text) glued directly onto the code with zero
+// separating whitespace (e.g. "...ลูกค้ารถ19KN58060กระนวน", no space before
+// "KN58060"). `\b` treats digit->letter as NOT a boundary (both are \w), so
+// it silently failed to match — and since a non-match raises no warning,
+// that customer's row (and its distance/เซลล์) vanished from the parsed
+// output entirely, with nothing in the UI pointing at why. A digit
+// immediately before the code is exactly the shape we need to allow; only
+// another Latin letter right before it would indicate we're mid-token.
+const CUSTOMER_CODE_RE = /(?<![A-Za-z])([A-Za-z]{1,5}\d{4,})\b/g;
 const DISTANCE_OR_PASSTHROUGH_RE = /(\d+(?:\.\d+)?)|(ทางผ่าน)/;
 // Common table-header fragments that can leak into the first row's
 // best-effort "name" guess (display-only field, never used for matching —
