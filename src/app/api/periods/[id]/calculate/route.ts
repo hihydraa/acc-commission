@@ -10,6 +10,7 @@ import {
 import type { FreightTier } from "@/lib/calc/freightTable";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 /**
  * Re-runs the L-R commission formulas (spec §4.3) for every transaction in

@@ -5,6 +5,7 @@ import type { CommissionConfig } from "@/lib/calc/commissionEngine";
 import type { TeamSplitConfig } from "@/lib/calc/teamSplit";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
   const periodId = params.id;

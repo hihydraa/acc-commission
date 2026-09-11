@@ -13,37 +13,95 @@ interface Props {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  sales: "รายงานขายรายรถ (PDF)",
+  sales: "รายงานขายรายรถ (PDF) — เลือกได้หลายไฟล์พร้อมกัน 1 ไฟล์ต่อรถ 1 คัน",
   ar: "รายงานลูกหนี้คงค้าง (PDF)",
   master: "ไฟล์ระยะทาง+เซลล์ (PDF/Excel)",
 };
+
+// Vercel serverless functions time out well before a slow parse of a large,
+// real multi-page PDF finishes if left unbounded — give it a generous
+// client-side ceiling so a hung request fails loudly instead of leaving the
+// UI stuck on "กำลังประมวลผล..." forever.
+const UPLOAD_TIMEOUT_MS = 55_000;
+
+interface UploadResult {
+  filename: string;
+  kind: string;
+  [key: string]: unknown;
+}
 
 export function UploadPanel({ periodId, initialSourceFiles, transactionCount }: Props) {
   const router = useRouter();
   const [sourceFiles, setSourceFiles] = useState(initialSourceFiles);
   const [busy, setBusy] = useState<string | null>(null);
-  const [lastResult, setLastResult] = useState<Record<string, unknown> | null>(null);
+  const [results, setResults] = useState<UploadResult[]>([]);
   const [calcResult, setCalcResult] = useState<Record<string, unknown> | null>(null);
 
-  async function handleUpload(kind: "sales" | "ar" | "master", file: File) {
-    setBusy(kind);
-    setLastResult(null);
+  async function uploadOne(kind: "sales" | "ar" | "master", file: File): Promise<UploadResult> {
     const form = new FormData();
     form.append("kind", kind);
     form.append("file", file);
-    const res = await fetch(`/api/periods/${periodId}/parse`, { method: "POST", body: form });
-    const json = await res.json();
-    setLastResult({ kind, filename: file.name, ...json });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+    try {
+      const res = await fetch(`/api/periods/${periodId}/parse`, {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let message = `เซิร์ฟเวอร์ตอบกลับผิดพลาด (HTTP ${res.status})`;
+        try {
+          const errJson = await res.json();
+          message = errJson.error ?? errJson.message ?? message;
+        } catch {
+          // response wasn't JSON — keep the generic status message
+        }
+        return { filename: file.name, kind, ok: false, error: message };
+      }
+      const json = await res.json();
+      return { filename: file.name, kind, ...json };
+    } catch (err) {
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      return {
+        filename: file.name,
+        kind,
+        ok: false,
+        error: isAbort
+          ? `หมดเวลาประมวลผล (เกิน ${UPLOAD_TIMEOUT_MS / 1000} วินาที) — ไฟล์อาจใหญ่/ซับซ้อนเกินไป หรือเซิร์ฟเวอร์มีปัญหา`
+          : `เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function handleFilesSelected(kind: "sales" | "ar" | "master", fileList: FileList) {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    setBusy(kind);
+    setResults([]);
+    // upload sequentially — parsing is CPU/IO heavy per file, and doing them
+    // one at a time keeps error messages attributable to the right file.
+    for (const file of files) {
+      const result = await uploadOne(kind, file);
+      setResults((prev) => [...prev, result]);
+    }
     setBusy(null);
     router.refresh();
   }
 
   async function handleCalculate() {
     setBusy("calculate");
-    const res = await fetch(`/api/periods/${periodId}/calculate`, { method: "POST" });
-    const json = await res.json();
-    setCalcResult(json);
-    setBusy(null);
+    try {
+      const res = await fetch(`/api/periods/${periodId}/calculate`, { method: "POST" });
+      const json = await res.json();
+      setCalcResult(json);
+    } catch (err) {
+      setCalcResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -54,10 +112,12 @@ export function UploadPanel({ periodId, initialSourceFiles, transactionCount }: 
           <input
             type="file"
             accept={kind === "master" ? ".pdf,.xlsx" : ".pdf"}
+            multiple={kind === "sales"}
             disabled={busy !== null}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleUpload(kind, file);
+              if (e.target.files && e.target.files.length > 0) {
+                handleFilesSelected(kind, e.target.files);
+              }
               e.target.value = "";
             }}
             className="block w-full text-sm"
@@ -66,34 +126,40 @@ export function UploadPanel({ periodId, initialSourceFiles, transactionCount }: 
         </div>
       ))}
 
-      {lastResult && (
-        <div
-          className={`rounded-lg border p-4 text-sm ${
-            lastResult.ok ? "border-green-300 bg-green-50" : "border-destructive bg-red-50"
-          }`}
-        >
-          <p className="font-medium">
-            {String(lastResult.filename)} ({String(lastResult.kind)}) —{" "}
-            {lastResult.ok ? "สำเร็จ" : "ไม่ผ่าน checksum / มีปัญหา"}
-          </p>
-          {Array.isArray(lastResult.issues) && lastResult.issues.length > 0 && (
-            <ul className="mt-2 list-disc pl-5">
-              {(lastResult.issues as { message: string }[]).map((issue, i) => (
-                <li key={i}>{issue.message}</li>
-              ))}
-            </ul>
-          )}
-          {Array.isArray(lastResult.warnings) && lastResult.warnings.length > 0 && (
-            <details className="mt-2">
-              <summary className="cursor-pointer text-muted-foreground">คำเตือน ({(lastResult.warnings as string[]).length})</summary>
-              <ul className="mt-1 list-disc pl-5">
-                {(lastResult.warnings as string[]).map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-          {"error" in lastResult && <p className="text-destructive">{String(lastResult.error)}</p>}
+      {results.length > 0 && (
+        <div className="space-y-2">
+          {results.map((result, idx) => (
+            <div
+              key={idx}
+              className={`rounded-lg border p-4 text-sm ${
+                result.ok ? "border-green-300 bg-green-50" : "border-destructive bg-red-50"
+              }`}
+            >
+              <p className="font-medium">
+                {result.filename} ({result.kind}) — {result.ok ? "สำเร็จ" : "ไม่ผ่าน checksum / มีปัญหา"}
+              </p>
+              {Array.isArray(result.issues) && result.issues.length > 0 && (
+                <ul className="mt-2 list-disc pl-5">
+                  {(result.issues as { message: string }[]).map((issue, i) => (
+                    <li key={i}>{issue.message}</li>
+                  ))}
+                </ul>
+              )}
+              {Array.isArray(result.warnings) && result.warnings.length > 0 && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-muted-foreground">
+                    คำเตือน ({(result.warnings as string[]).length})
+                  </summary>
+                  <ul className="mt-1 list-disc pl-5">
+                    {(result.warnings as string[]).map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              {"error" in result && <p className="text-destructive">{String(result.error)}</p>}
+            </div>
+          ))}
         </div>
       )}
 

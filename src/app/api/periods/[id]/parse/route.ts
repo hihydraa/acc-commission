@@ -9,6 +9,10 @@ import { parseDistanceMasterText } from "@/lib/parser/distanceMaster";
 import { thaiDateToIso } from "@/lib/thaiDate";
 
 export const runtime = "nodejs";
+// pdf-parse on a real multi-page report + writing hundreds of transaction
+// rows can take longer than the platform's 10s default — Vercel Hobby
+// supports up to 60s via this export (Pro/Enterprise allow more).
+export const maxDuration = 60;
 
 /**
  * Ingests one uploaded file for a period (spec §1 step [2] PARSE).
