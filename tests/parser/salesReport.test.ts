@@ -92,4 +92,27 @@ describe("parseSalesReportText", () => {
     expect(result.ok).toBe(false);
     expect(result.issues.length).toBeGreaterThan(0);
   });
+
+  it("carries currentProductCode across a page break without corrupting it, even with a PUA character mid-word in the reprinted column header (real bug found against เบอร์60/เบอร์67/กรอกปั๊ม ส.ค. 69)", () => {
+    // A page break reprints the company/title lines, the "วันที่จาก...ถึง...
+    // วันที่ : dd/mm/yy" period-range line, and the column-header line — but
+    // NOT the product header (spec §3.2). Real files inject a Private Use
+    // Area codepoint (U+F70B here) inside "สินค\u{F70B}า", and the
+    // dd/mm/yy date contains slashes that look like a "<name>/<code>"
+    // header to CODE_SUFFIX_RE — either alone was enough to make the parser
+    // silently invent a fake product ("รหัส" / "09/69") and misattribute
+    // every following sale line to it until the next real product header.
+    const withPageBreak =
+      SAMPLE_REPORT.replace(/รวมทั้งสิ้น.*$/m, "") +
+      `หางหุนสวนจำกัด เค.ซี.ปโตรเลียม 2006  หนา : 2\n` +
+      `วันที่จาก          1 ส.ค. 2569          ถึง   31 ส.ค. 2569        วันที่    : 08/09/69\n` +
+      `    รายการสิน\u{F70B}คา/รหัส  ขายสด  ขายเชื่อ\n` +
+      `       เลขที่เอกสาร         วันที่         จํานวน\n` +
+      `  IDA726080015-1 20/08/69 3,000.00 96,450.00 93,000.00 KCL660019 3,000.00 ลิตร 32.15 32.15 0 0.00 96450.00\n` +
+      `รวมทั้งสิ้น ลูกคา 3 ราย 9,500.00 ลิตร 305423.13\n`;
+    const report = parseSalesReportText(withPageBreak);
+    const carriedOverLine = report.lines.find((l) => l.docNo === "IDA726080015-1");
+    expect(carriedOverLine).toBeDefined();
+    expect(carriedOverLine!.productCode).toBe("DS");
+  });
 });

@@ -1,4 +1,4 @@
-import { normalizeDocNo, baseDocNo } from "./normalize";
+import { normalizeDocNo, baseDocNo, normalizeThai } from "./normalize";
 import type {
   ParsedSalesReport,
   DepartmentCode,
@@ -67,7 +67,23 @@ const SKIP_LINE_MARKERS = [
   "รายการสินค้า",
   "รายการสินคา",
   "เขตการขายจาก",
+  // The real เบอร์60/เบอร์67/เทรลเลอร์68/กรอกปั๊ม ส.ค. 69 files print this
+  // "วันที่จาก ... ถึง ... วันที่ : dd/mm/yy" period-range line once per page
+  // (not just page 1), and its trailing "dd/mm/yy" contains slashes that
+  // CODE_SUFFIX_RE matches as if it were a "<name>/<code>" header — without
+  // this marker, every page break silently corrupts currentProductCode to
+  // something like "09/69" for every sale line until the next real product
+  // header line appears (found while chasing the "รายการสินคา/รหัส" PUA bug:
+  // fixing that one just unmasked this second, independent header line that
+  // was never covered by a skip marker at all).
+  "วันที่จาก",
 ];
+// Both sides of the marker check below must go through the SAME
+// normalization — the raw markers above contain Thai combining marks
+// (e.g. the ิ in "สินคา") that normalizeThai() also strips, so comparing a
+// normalized line against these un-normalized literals would just trade
+// one false-negative for another.
+const NORMALIZED_SKIP_LINE_MARKERS = SKIP_LINE_MARKERS.map(normalizeThai);
 
 const COMPANY_LINE_RE = /^ห[จๆ]ก\.|บริษัท|ห้างหุ้นส่วน|หางหุนสวน/;
 
@@ -156,7 +172,22 @@ export function parseSalesReportText(text: string): ParsedSalesReport {
     const trimmed = raw.trim();
     if (!trimmed) continue;
 
-    if (SKIP_LINE_MARKERS.some((m) => trimmed.includes(m))) continue;
+    // A page break reprints the page header + column-header lines (but NOT
+    // the product header — see the module doc comment on §3.2's warning).
+    // Real files can have a Private Use Area codepoint injected mid-word in
+    // that column-header line (e.g. "สินคา" instead of "สินคา"), which
+    // makes a plain .includes(marker) check silently fail to match — the
+    // line then falls through into the header-parsing logic below, gets
+    // misread as a brand-new product header (because "รหัส" is on the far
+    // side of its own "/"), and corrupts every following sale line's
+    // product code as "รหัส" until the next REAL product header appears.
+    // Normalizing (stripping PUA + tone marks) before the marker check
+    // closes that gap — confirmed against real เบอร์60/เบอร์67/กรอกปั๊ม
+    // ส.ค. 69 files, where this silently dropped a large fraction of
+    // otherwise-qualifying rows from commission entirely (productCode
+    // "รหัส" never matches eligibility.fuelProductCodes).
+    const trimmedForSkipCheck = normalizeThai(trimmed);
+    if (NORMALIZED_SKIP_LINE_MARKERS.some((m) => trimmedForSkipCheck.includes(m))) continue;
     if (COMPANY_LINE_RE.test(trimmed)) continue;
 
     if (trimmed.startsWith("รวมทั้งสิ้น")) {

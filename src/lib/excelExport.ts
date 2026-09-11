@@ -143,16 +143,21 @@ export async function buildCommissionWorkbook(input: ExportInput): Promise<Excel
   const { thresholds, ratePerLiter, penaltyNegativeQEnabled } = input.config;
 
   // ---------- 1. Master ----------
-  // One row per distinct customer referenced by a transaction this period —
-  // the SKILL/Template require a Master sheet inside the workbook itself
-  // (not just an external reference) so a reviewer can see the
-  // ระยะทาง/เซลล์/Tag that drove each row's numbers without leaving the file.
+  // One row per distinct customer that actually has a QUALIFYING transaction
+  // this period (isEligible — passed product/customer/qty/round-1000 scope,
+  // per marketing-commission-calc SKILL: "narrow to only the customers that
+  // actually have a qualifying transaction this month... cross-check the
+  // master file against that short list, not the full customer roster").
+  // A raw sales export can carry hundreds of tiny/walk-in rows that never
+  // needed a distance/เซลล์ lookup at all — listing every one of them here
+  // (as an earlier version of this function did) buries the handful of
+  // rows that genuinely need Review under noise from ones that don't.
   const masterSheet = workbook.addWorksheet("Master");
   masterSheet.addRow(["รหัสลูกค้า", "ชื่อลูกค้า", "เซลล์", "ระยะทาง(กม.)", "Tag", "หมายเหตุ"]);
   masterSheet.getRow(1).font = { bold: true };
   const seenCustomers = new Set<string>();
   for (const r of input.rows) {
-    if (!r.customerCode || seenCustomers.has(r.customerCode)) continue;
+    if (!r.customerCode || !r.isEligible || seenCustomers.has(r.customerCode)) continue;
     seenCustomers.add(r.customerCode);
     masterSheet.addRow([
       r.customerCode,
